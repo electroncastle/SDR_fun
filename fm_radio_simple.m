@@ -1,5 +1,5 @@
 % Very elementary FM radio demodulator. It requires a file with analytic 
-% signal as an imput.
+% signal as an input.
 %
 % Jiri Fajtl <ok1zjf@gmail.com>
 % Free to use for everyone
@@ -7,33 +7,136 @@
 % History
 %   12.3.2013 - Modified the audio stream downsampling to produce an accurate
 %               target sampling rate
-%
+%   
+%   14.3.2013 - Forked this file from the fm_demod_simple.m. Added a detection
+%               of the multiple program carriers in the spectrum, plot of 
+%               the input and down/up mixed spectrum and the complex mixer.
+%               
 %
 
 % BBC Oxford - 95.2 FM
-filename = '../capture-95200-2M.bin';
+%filename = '../capture-95200-2M.bin';
 
-cwfs = 2000000; % Carrier wave sampling frequency
-demodFs = 200000; % Sampling freqeuncy (200KHz) we use for our FM demodulator
-audioFs = 48000; % Sampling frequency of the output audio stream
+% Tuner frequency 102.0 MHz
+% Carrier 1: +600Khz = Heart FM ??
+% Carrier 2: -700Khz = Classic FM
+f0 = 102000000; % in Hz
+filename = '../capture-102000-2M.bin';
+
+
+cwfs = 2000000; % In Hz. Carrier wave sampling frequency
+demodFs = 200000; % in Hz. Sampling freqeuncy (200KHz) we use for our FM demodulator
+audioFs = 48000; % in Hz. Sampling frequency of the output audio stream
 % The audio will get saved to a file with filename+'.pcm' in raw format
 % Mono, Signed 16 bits integer
 
-accurateSubsampling = true; % If true the audio downsampling will be done to
+accurateSubsampling = false; % If true the audio downsampling will be done to
 % the exact audioFs otherwise to an integer of  demodFs/demodFs
 
+carrierDelta = 0;  
+carrierDelta = 600000; % in +/- Hz If the program carrier is not at the 
+% origin set the offset here in Hz. If it's zero the program will try to
+% detect all carriers in the spectrum and selects the first one.
+
+%-------------------------------------------------------------------------
+% Read file with the samples
+%-------------------------------------------------------------------------
 fid = fopen(filename,'rb');
 y = fread(fid,'uint8=>double');
-y = y-127; % convert to signed ch ar
+y = y-127; % convert to signed char
 
 % Create complex numbers from the I and Q streams
 % Odd samples are I, even Q
 y = y(1:2:end) + i*y(2:2:end);
 
+%-------------------------------------------------------------------------
+% Show the power spectrum of the input signal
+%-------------------------------------------------------------------------
+fftlen = 4096;
+[n m] = size(y);
+s = floor(n / fftlen)
+y = y(1:s*fftlen);
+x = reshape(y, fftlen, s); 
+yf = fft(x,[],1);
+
+% plot signal
+X = fftshift(yf, 1); 
+pSpect = mean(abs(X).^2, 2); 
+
+binWidth = cwfs/fftlen;
+f=linspace(0, 1, fftlen);
+f = cwfs*f-cwfs/2;
+f = f/1e3;
+figure(1); plot(f, 10*log10(pSpect(1:fftlen))); 
+xlabel('KHz'); ylabel('Gain (dB)');
+
+% Find possible carriers in the spectrum
+[pks,locs] = findpeaks(pSpect, ...
+        'MINPEAKDISTANCE', round(100000 / binWidth), ...
+        'MINPEAKHEIGHT', 1e8);
+                        
+carriers = (locs+1-(fftlen/2)) * binWidth;
+disp('Found carriers. Relative to sampled frequency band. In KHz.')
+disp(carriers/1e3)
+
+disp('Found carriers. Absolute frequency in MHz.')
+(carriers+f0)/1e6
+
+
+%--------------------------------------------------------------------------
+% Qadrature mixer
+%--------------------------------------------------------------------------
+% Down/Up shift a given carrier to the origin. If the carrier was not specified
+% use the first that we found.
+if carrierDelta == 0
+    carrierDelta = carriers(1)
+end
+
+% If the carrier is zero we don't have to do any mixing here.
+if ~carrierDelta == 0    
+    
+    % Create a complex oscillator with frequency 
+    % by which we need to reduce or advance the freq spectrum.
+    n = 1:length(y);
+    t = 1/cwfs; % This is the main sampling interval
+    z = cos(carrierDelta*2*pi*t*n)';
+    oscCplx = hilbert(z);
+    
+    % To rotate clockwise get a complex conjugate of the local oscillator.
+    if carrierDelta > 0
+        oscCplx = conj(oscCplx);
+    end
+    
+    % Multiply our signal with the oscillator signal. Multiplication of 
+    % complex numbers will move the phasor.
+    y = y.*oscCplx;
+end
 
 %-------------------------------------------------------------------------
-% The following code actually does the demodulation
+% Show the power spectrum after the mixer
+%-------------------------------------------------------------------------
+fftlen = 4096;
+[n m] = size(y);
+s = floor(n / fftlen)
+y = y(1:s*fftlen);
+x = reshape(y, fftlen, s); 
+yf = fft(x,[],1);
 
+% plot signal
+X = fftshift(yf, 1); 
+pSpect = mean(abs(X).^2, 2); 
+
+binWidth = cwfs/fftlen;
+f=linspace(0, 1, fftlen);
+f = cwfs*f-cwfs/2;
+f = f/1e3;
+figure(2); plot(f, 10*log10(pSpect(1:fftlen))); 
+xlabel('KHz'); ylabel('Gain (dB)');
+
+
+%-------------------------------------------------------------------------
+% FM complex baseband delay demodulator
+%-------------------------------------------------------------------------
 % Subsample to fs=200KHz from 2MHz
 % Low pass first with cutoff ~ fs/2
 subsample = floor(cwfs/demodFs)
@@ -69,10 +172,11 @@ pcm = angle(yf);
 % Bacially this angle directly corresponds to the amplitude of the audio
 % signal. 
 
+%-------------------------------------------------------------------------
 % Plot the average power of the audio freqeuncy spectrum before subsampling
-% so we can see other interesting information such as the 19KHz pilot for
-% the Stereo decoding or RDS data stream
-% Only the positive frequencies
+%-------------------------------------------------------------------------
+% We can see other interesting information such as the 19KHz pilot for
+% the stereo decoding or RDS data stream. Only the positive frequencies
 fftlen = 1024;
 [n m] = size(pcm);
 s = floor(n / fftlen)
@@ -89,9 +193,13 @@ Xpwr = mean(abs(X).^2, 2); % Compute average power spectrum
 f=linspace(0,1,fftlen/2+1);
 f = f * demodFs/2;
 f = f./1e3; % Show the freqeuncies in KHz 
-figure(1); plot(f , 10*log10(Xpwr(1:fftlen/2+1)))
+figure(3); plot(f , 10*log10(Xpwr(1:fftlen/2+1)))
 xlabel('KHz'); ylabel('Gain (dB)');
 
+
+%-------------------------------------------------------------------------
+% Downsample to the target audio framerate
+%-------------------------------------------------------------------------
 
 % Low pass and subsample the audio to the audioFs sampling rate
 % You can calculate the Fc the same way as above
@@ -128,6 +236,7 @@ pcm = pcm ./ pi; % Convert the angle (±pi) to ±1
 
 %----------------------------------------------------------------------
 % The following is just a file output and playback in Matlab
+%-------------------------------------------------------------------------
 
 % Convert to signed in16 ±32767
 % You can change it here to int8 (char) if you like

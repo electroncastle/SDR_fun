@@ -10,6 +10,10 @@
 %
 %
 
+% Download binary IQ files from:
+%      http://daigazou.com/sdr/capture-95200-2M.bin.zip
+%      http://daigazou.com/sdr/capture-102000-2M.bin.zip
+
 % BBC Oxford - 95.2 FM
 filename = '../capture-95200-2M.bin';
 
@@ -123,13 +127,13 @@ windowSize = subsample;
 kernel = ones(1,windowSize)/windowSize;
 pcm = filter(kernel, 1, pcm);
 pcm = pcm(1:subsample:end);
-pcm = pcm ./ pi; % Convert the angle (±pi) to ±1
+pcm = pcm ./ pi; % Convert the angle (Â±pi) to Â±1
 
 
 %----------------------------------------------------------------------
 % The following is just a file output and playback in Matlab
 
-% Convert to signed in16 ±32767
+% Convert to signed in16 Â±32767
 % You can change it here to int8 (char) if you like
 pcm16 = pcm .* 32767;
 
